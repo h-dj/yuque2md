@@ -1,3 +1,5 @@
 /save_file_md/
 /.cache/
 /venv/
+/.idea/
+/__pycache__/
