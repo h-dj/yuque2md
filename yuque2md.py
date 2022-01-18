@@ -2,11 +2,14 @@
 # Author : huangjiajian
 
 import argparse
+import hashlib
 import json
+import mimetypes
 import re
 import sys
 import typing
 import os
+import uuid
 from urllib.parse import urlparse
 import requests
 
@@ -15,9 +18,9 @@ from MyYuque import MyYuque
 cache_dir = os.getcwd() + '/.cache'
 # 匹配图片URL的正则
 pic_pattern = re.compile(r'!\[.*?\]\((.*?)\)', re.S)
-md_a_pattern = re.compile(r'<a name="(\w+?)"></a>', re.S)
+md_a_pattern = re.compile(r'<a\s+?name="(\w+?)"></a>', re.S)
 md_br_pattern = re.compile(r'<br\s+?/>', re.S)
-md_blank_pattern = re.compile(u'[\u200B|\u00A0]', re.S)
+md_blank_pattern = re.compile(u'[\u200B]', re.S)
 
 
 class Yuque2md(object):
@@ -39,7 +42,7 @@ class Yuque2md(object):
         self.login = args.login
         self.yuque = MyYuque(api_host=self.api_host, user_token=self.token)
 
-    def get_user_repos(self, login_id: str, params: typing.Dict = {'type': 'Book', 'offset': 1}):
+    def get_user_repos(self, login_id: str, params: typing.Dict = {'type': 'Book', 'offset': 0}):
         """
         获取用户的所有知识库列表
         :return:
@@ -48,7 +51,7 @@ class Yuque2md(object):
         repos_list = repos_json['data']
         size = len(repos_list)
         if size > 0:
-            params['offset'] = params['offset'] + size
+            params['offset'] = params['offset'] + size + 1
             temp_list = self.get_user_repos(login_id, params)
             return temp_list + repos_list
         else:
@@ -89,22 +92,24 @@ class Yuque2md(object):
             os.makedirs(doc_json_path)
 
         if os.path.isfile(doc_json_file_path):
-
-            with open(doc_json_file_path, 'r') as f:
-                doc_json_str = f.read()
-                if doc_json_str is '':
-                    print('----------------> 删除错误文件 ', doc_json_file_path)
-                    os.remove(doc_json_file_path)
-                else:
-                    _doc = json.loads(doc_json_str)
-                    title = _doc['data']['title']
-                    print('---> 解析文档(缓存) --->', title, '---', repo_namespace, ' -- ', slug)
-                    return _doc
-
+            try:
+                with open(doc_json_file_path, 'r', encoding='utf-8') as f:
+                    doc_json_str = f.read()
+                    if doc_json_str is '':
+                        print('----------------> 删除错误文件 ', doc_json_file_path)
+                        os.remove(doc_json_file_path)
+                    else:
+                        _doc = json.loads(doc_json_str)
+                        title = _doc['data']['title']
+                        print('---> 解析文档(缓存) --->', title, '---', repo_namespace, ' -- ', slug)
+                        return _doc
+            except:
+                print(doc_json_file_path)
+                os.remove(doc_json_file_path)
         else:
             print('---> 解析文档 --->', repo_namespace, ' -- ', slug)
             doc_json = self.yuque.docs.get(namespace=repo_namespace, slug=slug, data={'raw': raw})
-            with open(doc_json_file_path, 'w') as f:
+            with open(doc_json_file_path, 'w', encoding='utf-8') as f:
                 if doc_json is not None and doc_json is not '':
                     f.write(json.dumps(doc_json, ensure_ascii=False))
             title = doc_json['data']['title']
@@ -153,43 +158,76 @@ class Yuque2md(object):
         return image_url_list
 
     @staticmethod
-    def download_image(cur_path, image_list: list):
+    def get_file_name(content_type, url) -> str:
+        """
+        生成文件名称
+        :param content_type:
+        :param url:
+        :return:
+        """
+        try:
+            path = urlparse(url).path
+            len_path = len(path)
+            dot_index = path.rfind(".")
+            if dot_index == -1:
+                mimetype = content_type.split(';')[0]
+                suffix = mimetypes.guess_extension(mimetype)
+            else:
+                suffix = path[dot_index:len_path]
+            return hashlib.md5(url.encode(encoding='utf-8')).hexdigest() + suffix
+        except:
+            print('url ', url)
+        return None
+
+    @staticmethod
+    def download_image(cur_path, image_list: list, repo_namespace, slug) -> dict:
         """
         离线图片，下载到当前文件夹下的 asserts 目录中
         :param image_list:
         :param cur_path: 当前路径
+        :param repo_namespace:
+        :param slug:
         :return:
         """
         image_dict = {}
+        image_dict_path = os.path.join(cache_dir, 'url', repo_namespace)
+        image_dict_file_path = os.path.join(image_dict_path, slug + '.json')
+
+        if not os.path.exists(image_dict_path):
+            os.makedirs(image_dict_path)
+        if os.path.isfile(image_dict_file_path):
+            with open(image_dict_file_path, 'r', encoding='utf-8') as f:
+                image_dict_json = f.read()
+                image_dict = json.loads(image_dict_json)
+
         image_relative_path = 'asserts'
         for image_src in image_list:
+            if image_dict.get(image_src):
+                print('-- skip download file -------->', image_src)
+                continue
+
             image_absolute_path = os.path.join(cur_path, image_relative_path)
             if os.path.exists(image_absolute_path) is False:
                 os.makedirs(image_absolute_path)
-
-            suffix_index = image_src.rfind('#')
-            if suffix_index == -1:
-                suffix_index = image_src.rfind('?')
-            if suffix_index == -1:
-                suffix_index = len(image_src) + 1
-            start_index = image_src.rfind('/', 0, suffix_index)
-            image_file_name = image_src[start_index + 1:suffix_index]
-
-            image_file_absolute_path = os.path.join(image_absolute_path, image_file_name)
-
-            if os.path.isfile(image_file_absolute_path) is True:
-                print('-----------> skip download_image ', image_src)
-                image_dict[image_src] = os.path.join(image_relative_path, image_file_name)
-                continue
 
             if image_src.startswith("http") is False:
                 print('-----------> 非法图片', image_src)
                 continue
             print('-----------> download_image ', image_src)
             resp = requests.get(image_src, stream=True)
+            if resp.status_code != 200:
+                print('-----------> 非法响应吗: ', resp.status_code, image_src)
+                continue
+            file_name = Yuque2md.get_file_name(resp.headers.get('Content-Type'), image_src)
+            image_file_absolute_path = os.path.join(image_absolute_path, file_name)
             with open(image_file_absolute_path, 'wb') as f:
                 f.write(resp.content)
-                image_dict[image_src] = os.path.join(image_relative_path, image_file_name)
+                image_dict[image_src] = os.path.join(image_relative_path, file_name)
+
+        # 缓存当前的image_dict
+        with open(image_dict_file_path, 'w', encoding='utf-8') as f:
+            f.write(json.dumps(image_dict, ensure_ascii=False))
+
         return image_dict
 
     def start(self):
@@ -234,12 +272,12 @@ class Yuque2md(object):
                     _doc_title = _data['title']
                     _doc_body = self.format_doc(_data['body'])
                     image_list = self.get_image_url(_doc_body)
-                    _image_dict = self.download_image(_md_path, image_list)
+                    _image_dict = self.download_image(_md_path, image_list, repo_namespace, _toc_url)
                     for _image_src in _image_dict:
                         _doc_body = _doc_body.replace(_image_src, _image_dict[_image_src])
 
                     _md_file_path = os.path.join(_md_path, _toc_title + '.md')
-                    with open(_md_file_path, 'w') as f:
+                    with open(_md_file_path, 'w', encoding='utf-8') as f:
                         f.write(_doc_body)
 
 
