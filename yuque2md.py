@@ -21,6 +21,9 @@ pic_pattern = re.compile(r'!\[.*?\]\((.*?)\)', re.S)
 md_a_pattern = re.compile(r'<a\s+?name="(\w+?)"></a>', re.S)
 md_br_pattern = re.compile(r'<br\s+?/>', re.S)
 md_blank_pattern = re.compile(u'[\u200B]', re.S)
+common_header = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36'
+}
 
 
 class Yuque2md(object):
@@ -69,13 +72,13 @@ class Yuque2md(object):
             os.makedirs(cache_toc_path)
 
         if os.path.isfile(cache_toc_path_file):
-            with open(cache_toc_path_file, 'r') as f:
+            with open(cache_toc_path_file, 'r', encoding='utf-8') as f:
                 toc_json_str = f.read()
                 toc_json = json.loads(toc_json_str)
                 return toc_json['data']
         else:
             toc_json = self.yuque.repos.toc(repo_namespace)
-            with open(cache_toc_path_file, 'w') as f:
+            with open(cache_toc_path_file, 'w', encoding='utf-8') as f:
                 f.write(json.dumps(toc_json, ensure_ascii=False))
             return toc_json['data']
 
@@ -214,9 +217,9 @@ class Yuque2md(object):
                 print('-----------> 非法图片', image_src)
                 continue
             print('-----------> download_image ', image_src)
-            resp = requests.get(image_src, stream=True)
+            resp = requests.get(image_src, stream=True, headers=common_header)
             if resp.status_code != 200:
-                print('-----------> 非法响应吗: ', resp.status_code, image_src)
+                print('-----------> 非法响应码: ', resp.status_code, image_src)
                 continue
             file_name = Yuque2md.get_file_name(resp.headers.get('Content-Type'), image_src)
             image_file_absolute_path = os.path.join(image_absolute_path, file_name)
